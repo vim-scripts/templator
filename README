@@ -1,0 +1,57 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=4345
+
+This plugin provides the |:Templator| command that can be used to easily 
+create multi-file projects.
+
+In many programming languges/environments, you usually work with a set of files 
+that belong together. E.g. if you create a c file, you usually also want to 
+create a h header file. If you create a viewer file, you usually also want to 
+create corresponding model and controller files. If you want to create a 
+library file, you usually also want to create some test file etc. This is were 
+templator comes in.
+
+The templator plugin allows the creation of filesets based on multi-file 
+templates. Possible use cases:
+
+    - Create multi-file projects
+    - Create multiple-files within a project, e.g.
+        - a source file and the corresponding header file
+        - a source file and the corresponding test file
+        - files for a model, a view, and a controller
+
+Templates can be written in any code template/skeleton/snippets style. At the 
+time of writing, templates can be written in:
+
+    - template vim (see |templator-tvim|) ("tvim" extension)
+    - tskeleton (vimscript #1160) ("tskel" extension)
+
+It shoudln't be too difficult to add support for additional template 
+engines.
+
+
+Tutorial~
+
+The vimplugin template, which is provided with the plugin, consist of the following files: >
+
+    ~/.vim/templator/vimplugin.tvim/README_${1}.TXT
+    ~/.vim/templator/vimplugin.tvim/docs/${1}.txt
+    ~/.vim/templator/vimplugin.tvim/plugin/${1}.vim
+    ~/.vim/templator/vimplugin.tvim/autoload/${1}.vim
+
+and an optional vim script (see |templator-scripts|) in:
+    
+    ~/.vim/templator/vimplugin.vim
+
+The command call >
+
+    :Templator ~/src/foo/bar/vimplugin myplugin
+
+will result in the creation of the following files: >
+
+    ~/src/foo/bar/README_myplugin.TXT
+    ~/src/foo/bar/docs/myplugin.txt
+    ~/src/foo/bar/plugin/myplugin.vim
+    ~/src/foo/bar/autoload/myplugin.vim
+
+Any placeholders within the files are expanded.
+
