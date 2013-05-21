@@ -1,7 +1,7 @@
 " @Author:      Tom Link (mailto:micathom AT gmail com?subject=[vim])
 " @License:     GPL (see http://www.gnu.org/licenses/gpl.txt)
-" @Last Change: 2012-12-05.
-" @Revision:    285
+" @Last Change: 2012-12-13.
+" @Revision:    314
 
 
 if !exists('g:templator#verbose')
@@ -11,15 +11,22 @@ if !exists('g:templator#verbose')
 endif
 
 
-if !exists('g:templator#drivers')
+if !exists('g:templator#hooks')
     " :nodoc:
-    let g:templator#drivers = {}   "{{{2
+    let g:templator#hooks = {}   "{{{2
 endif
 
 
-if !exists('g:templator#edit')
-    " The command used for opening files.
-    let g:templator#edit = 'hide edit'   "{{{2
+if !exists('g:templator#edit_new')
+    " The command used for editing newly created files.
+    let g:templator#edit_new = 'hide edit'   "{{{2
+endif
+
+
+if !exists('g:templator#edit_again')
+    " The command used for editing files that already existed.
+    " If empty, don't open already existing files.
+    let g:templator#edit_again = g:templator#edit_new   "{{{2
 endif
 
 
@@ -50,40 +57,14 @@ endf
 
 " Create files based on the template set referred to by the basename of 
 " the name argument.
-
-" The name argument may contain directory information. E.g. 
-" "foo/bar/test" will create file from the template set "test" in the 
-" directory "foo/bar", which will be created if necessary.
-"
-"                                                     *b:templator_root_dir*
-" If the name argument begins with "*", the filename is relative to the 
-" project's root directory. Templator uses the following methods to find 
-" the project's root directory:
-"
-"   1. If the variable b:templator_root_dir exists, use its value.
-"   2. If tlib (vimscript #1863) is available, check if the current 
-"      buffer is under the control of a supported VCS and use that 
-"      directory.
-"
-" Example:
-" If b:templator_root_dir is /home/foo/bar and the current buffer is 
-" /home/foo/bar/src/lib/test.c, then *boo/far will create files from the 
-" "far" template set in /home/foo/bar/boo.
-"
-" Additional arguments can be passed as a mix of numbered and named 
-" arguments. E.g. "foo name=bar boo" will be parsed as:
-"
-"     1    = foo
-"     name = bar
-"     2    = boo
-"
-" Those arguments can be used from placeholders (see 
-" |templator-placeholders|).
 function! templator#Setup(name, ...) "{{{3
     let args = s:ParseArgs(a:000)
     let [tname, dirname] = s:GetDirname(a:name)
     " TLogVAR dirname
     let templator = s:GetTemplator(tname)
+    if !s:RunHook('', tname, 'CheckArgs', args, 1)
+        throw 'templator#Setup: Invalid arguments for template set '. string(tname) .': '. string(a:000)
+    endif
     let ttype = templator.type
     let cwd = getcwd()
     " TLogVAR cwd
@@ -94,32 +75,42 @@ function! templator#Setup(name, ...) "{{{3
             let templator_dir_len += 1
         endif
         call s:RunHook(dirname, tname, 'Before', args)
+        let includefilename_args = copy(args)
         for filename in templator.files
-            call s:SetDir(dirname)
-            " TLogVAR filename
             let outfile = s:GetOutfile(dirname, filename, args, templator_dir_len)
-            if filereadable(outfile)
-                if g:templator#verbose
-                    echohl WarningMsg
-                    echom "Templator: File already exists: " outfile
-                    echohl NONE
-                endif
-                exec g:templator#edit fnameescape(outfile)
-            else
-                let lines = readfile(filename)
-                if writefile(lines, outfile) != -1
-                    let fargs = copy(args)
-                    let fargs.filename = outfile
-                    if !s:RunHook('', tname, 'Edit', args)
-                        exec g:templator#edit fnameescape(outfile)
+            let includefilename_args['__FILE__'] = filename
+            let includefilename_args['__FILENAME__'] = outfile
+            if s:RunHook('', tname, 'IncludeFilename', includefilename_args, 1)
+                call s:SetDir(dirname)
+                " TLogVAR filename
+                if filereadable(outfile)
+                    if g:templator#verbose
+                        echohl WarningMsg
+                        echom "Templator: File already exists: " outfile
+                        echohl NONE
                     endif
-                    let b:templator_args = args
-                    call templator#expander#{ttype}#Expand()
-                    call s:RunHook(&acd ? '' : expand('%:p:h'), tname, 'Buffer', args)
-                    unlet! b:templator_args
-                    update
+                    if !empty(g:templator#edit_again)
+                        exec g:templator#edit_again fnameescape(outfile)
+                        let b:noquickfixsigns = 1
+                    endif
+                else
+                    let lines = readfile(filename)
+                    if writefile(lines, outfile) != -1
+                        let fargs = copy(args)
+                        let fargs.filename = outfile
+                        if !s:RunHook('', tname, 'Edit', args)
+                            exec g:templator#edit_new fnameescape(outfile)
+                        endif
+                        let b:noquickfixsigns = 1
+                        let b:templator_args = args
+                        call templator#expander#{ttype}#Expand()
+                        call s:RunHook(&acd ? '' : expand('%:p:h'), tname, 'Buffer', args)
+                        unlet! b:templator_args
+                        update
+                    endif
                 endif
             endif
+            unlet! b:noquickfixsigns
         endfor
         call s:RunHook(dirname, tname, 'After', args)
     finally
@@ -217,12 +208,12 @@ function! s:GetTemplator(tname) "{{{3
     if !get(s:expanders_init, ttype, 0)
         throw printf("Templator: Unsupported template type %s for %s", ttype, a:name)
     endif
-    if !has_key(g:templator#drivers, ttype)
-        let g:templator#drivers[a:tname] = {}
-        let driver_file = fnamemodify(templator.dir, ':p:h:r') .'.vim'
-        " TLogVAR driver_file, filereadable(driver_file)
-        if filereadable(driver_file)
-            exec 'source' fnameescape(driver_file)
+    if !has_key(g:templator#hooks, ttype)
+        let g:templator#hooks[a:tname] = {}
+        let hooks_file = fnamemodify(templator.dir, ':p:h:r') .'.vim'
+        " TLogVAR hooks_file, filereadable(hooks_file)
+        if filereadable(hooks_file)
+            exec 'source' fnameescape(hooks_file)
         endif
     endif
     return templator
@@ -237,6 +228,7 @@ function! s:GetOutfile(dirname, filename, args, templator_dir_len) "{{{3
     " TLogVAR subfilename
     let outdir = a:dirname
     if !empty(subdir)
+        let subdir = s:ExpandFilename(subdir, a:args)
         if outdir == '.'
             let outdir = subdir
         else
@@ -259,7 +251,16 @@ endf
 
 function! s:RunHook(dirname, tname, name, args, ...) "{{{3
     " TLogVAR a:dirname, a:tname, a:name, a:args
-    let tdef = g:templator#drivers[a:tname]
+    if a:0 >= 1
+        let default_value = a:1
+        let return_success = 0
+    else
+        let return_success = 1
+    endif
+    if !has_key(g:templator#hooks, a:tname)
+        throw 'No hooks defined for template '. a:tname .' ('. join(keys(g:templator#hooks)) .')'
+    endif
+    let tdef = g:templator#hooks[a:tname]
     " TLogVAR tdef
     if has_key(tdef, a:name)
         if !empty(a:dirname)
@@ -268,15 +269,19 @@ function! s:RunHook(dirname, tname, name, args, ...) "{{{3
         try
             call s:SetDir(a:dirname)
             " TLogVAR tdef[a:name]
-            call tdef[a:name](a:args)
-            return 1
+            let return_value = tdef[a:name](a:args)
+            if return_success
+                return 1
+            else
+                return return_value
+            endif
         finally
             if !empty(a:dirname)
                 exec 'cd' fnameescape(cwd)
             endif
         endtry
     endif
-    return 0
+    return return_success ? 0 : default_value
 endf
 
 
